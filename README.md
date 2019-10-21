@@ -3,7 +3,7 @@ Allows Google Sheets access from a MySQL client
 
 **Work in progress**
 
-To use wit the example doc https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms
+To use with the example doc https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms
 
 1. Download `credentials.json` from https://developers.google.com/sheets/api/quickstart/go#step_1_turn_on_the
 
