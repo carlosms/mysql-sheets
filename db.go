@@ -76,11 +76,19 @@ func (db Database) Tables() map[string]sql.Table {
 				})
 		}
 
+		valuesFunc := func(from, to uint64) (*sheets.ValueRange, error) {
+			readRange := fmt.Sprintf("%v!%v:%v", sheetName, from, to)
+			resp, err := db.srv.Spreadsheets.Values.Get(db.spreadsheetId, readRange).Do()
+			if err != nil {
+				return nil, fmt.Errorf("unable to retrieve data from sheet range (%v): %v", readRange, err)
+			}
+			return resp, err
+		}
+
 		tables[sheetName] = &Table{
-			spreadsheetId: db.spreadsheetId,
-			sheetName:     sheetName,
-			schema:        schema,
-			srv:           db.srv,
+			values:    valuesFunc,
+			sheetName: sheetName,
+			schema:    schema,
 		}
 	}
 
@@ -89,10 +97,10 @@ func (db Database) Tables() map[string]sql.Table {
 
 // Table is an individual sheet inside the document
 type Table struct {
-	spreadsheetId string
-	sheetName     string
-	schema        sql.Schema
-	srv           *sheets.Service
+	values func(from, to uint64) (*sheets.ValueRange, error)
+
+	sheetName string
+	schema    sql.Schema
 }
 
 // Name returns the name
@@ -114,11 +122,9 @@ func (t *Table) Partitions(ctx *sql.Context) (sql.PartitionIter, error) {
 
 func (t *Table) PartitionRows(ctx *sql.Context, partition sql.Partition) (sql.RowIter, error) {
 	return &rowIter{
-		spreadsheetId: t.spreadsheetId,
-		sheetName:     t.sheetName,
-		sheetRow:      2,
-		srv:           t.srv,
-		width:         len(t.schema),
+		values:   t.values,
+		sheetRow: 2, // 1st row is the column names, values start on 2
+		width:    len(t.schema),
 	}, nil
 }
 
@@ -146,12 +152,12 @@ func (p partition) Key() []byte {
 }
 
 type rowIter struct {
-	spreadsheetId string
-	sheetName     string
-	sheetRow      uint64
-	srv           *sheets.Service
-	width         int
+	values func(from, to uint64) (*sheets.ValueRange, error)
 
+	// iterator index over the sheet row, starts at 1
+	sheetRow uint64
+	// width of the rows
+	width int
 	// current index over sheetValues
 	pos uint64
 	// values fetched from the API. Each new request replaces the previous values
@@ -192,10 +198,9 @@ func (i *rowIter) Next() (sql.Row, error) {
 // nextValues calls the API to retrieve the next requestSize rows. It also resets
 // i.pos to 0
 func (i *rowIter) nextValues() error {
-	readRange := fmt.Sprintf("%v!%v:%v", i.sheetName, i.sheetRow, i.sheetRow+requestSize)
-	resp, err := i.srv.Spreadsheets.Values.Get(i.spreadsheetId, readRange).Do()
+	resp, err := i.values(i.sheetRow, i.sheetRow+requestSize)
 	if err != nil {
-		return fmt.Errorf("unable to retrieve data from sheet range (%v): %v", readRange, err)
+		return err
 	}
 
 	if len(resp.Values) == 0 {
