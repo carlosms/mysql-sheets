@@ -9,6 +9,9 @@ import (
 	"gopkg.in/src-d/go-log.v1"
 )
 
+// requestSize is the number of rows per API request
+const requestSize = 20
+
 // Database is a Google Sheets document
 type Database struct {
 	spreadsheetId string
@@ -115,7 +118,7 @@ func (t *Table) PartitionRows(ctx *sql.Context, partition sql.Partition) (sql.Ro
 		sheetName:     t.sheetName,
 		sheetRow:      2,
 		srv:           t.srv,
-		size:          len(t.schema),
+		width:         len(t.schema),
 	}, nil
 }
 
@@ -147,29 +150,31 @@ type rowIter struct {
 	sheetName     string
 	sheetRow      uint64
 	srv           *sheets.Service
-	size          int
+	width         int
+
+	// current index over sheetValues
+	pos uint64
+	// values fetched from the API. Each new request replaces the previous values
+	sheetValues [][]interface{}
 }
 
 func (i *rowIter) Next() (sql.Row, error) {
-	readRange := fmt.Sprintf("%v!%v:%v", i.sheetName, i.sheetRow, i.sheetRow)
-	resp, err := i.srv.Spreadsheets.Values.Get(i.spreadsheetId, readRange).Do()
-	if err != nil {
-		return nil, fmt.Errorf("unable to retrieve data from sheet range (%v): %v", readRange, err)
+	if i.pos >= uint64(len(i.sheetValues)) {
+		err := i.nextValues()
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	if len(resp.Values) == 0 {
-		return nil, io.EOF
-	}
-
-	row := make([]interface{}, i.size)
+	row := make([]interface{}, i.width)
 	allEmpty := true
-	for i := range row {
-		if len(resp.Values[0]) <= i {
+	for j := range row {
+		if len(i.sheetValues[i.pos]) <= j {
 			break
 		}
 
-		v := resp.Values[0][i]
-		row[i] = v
+		v := i.sheetValues[i.pos][j]
+		row[j] = v
 		if v.(string) != "" {
 			allEmpty = false
 		}
@@ -179,9 +184,30 @@ func (i *rowIter) Next() (sql.Row, error) {
 		return nil, io.EOF
 	}
 
-	i.sheetRow++
+	i.pos++
 
 	return row, nil
+}
+
+// nextValues calls the API to retrieve the next requestSize rows. It also resets
+// i.pos to 0
+func (i *rowIter) nextValues() error {
+	readRange := fmt.Sprintf("%v!%v:%v", i.sheetName, i.sheetRow, i.sheetRow+requestSize)
+	resp, err := i.srv.Spreadsheets.Values.Get(i.spreadsheetId, readRange).Do()
+	if err != nil {
+		return fmt.Errorf("unable to retrieve data from sheet range (%v): %v", readRange, err)
+	}
+
+	if len(resp.Values) == 0 {
+		return io.EOF
+	}
+
+	i.sheetValues = resp.Values
+	i.sheetRow += uint64(len(resp.Values))
+
+	i.pos = 0
+
+	return nil
 }
 
 func (i *rowIter) Close() error {
