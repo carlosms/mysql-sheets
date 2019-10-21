@@ -1,8 +1,8 @@
 package main
 
 import (
+	"fmt"
 	"io/ioutil"
-	"log"
 
 	mysheetsql "github.com/carlosms/mysql-sheets"
 
@@ -11,30 +11,49 @@ import (
 	"github.com/src-d/go-mysql-server/server"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/sheets/v4"
+	cli "gopkg.in/src-d/go-cli.v0"
 )
 
+// Replaced during release build
+var (
+	version = "dev"
+	build   = "dev"
+)
+
+var app = cli.New("mysheetsql", version, build, "MySQL server that reads from Google Sheets data")
+
+type serveCommand struct {
+	cli.Command `name:"serve" short-description:"starts the server" long-description:"starts the server"`
+
+	SpreadsheetId string `short:"i" long:"id" env:"MYSHEETSQL_ID" required:"true" description:"Spreadsheet identifier from its URL, e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"`
+}
+
+var sub = app.AddCommand(&serveCommand{})
+
 func main() {
+	app.RunMain()
+}
+
+func (c *serveCommand) Execute(args []string) error {
 	b, err := ioutil.ReadFile("credentials.json")
 	if err != nil {
-		log.Fatalf("Unable to read client secret file: %v", err)
+		return fmt.Errorf("Unable to read client secret file: %v", err)
 	}
 
 	// If modifying these scopes, delete your previously saved token.json.
 	config, err := google.ConfigFromJSON(b, "https://www.googleapis.com/auth/spreadsheets.readonly")
 	if err != nil {
-		log.Fatalf("Unable to parse client secret file to config. See https://developers.google.com/sheets/api/quickstart/go#step_1_turn_on_the: %v", err)
+		return fmt.Errorf("Unable to parse client secret file to config. See https://developers.google.com/sheets/api/quickstart/go#step_1_turn_on_the: %v", err)
 	}
 	client := mysheetsql.GetClient(config)
 
 	srv, err := sheets.New(client)
 	if err != nil {
-		log.Fatalf("Unable to retrieve Sheets client: %v", err)
+		return fmt.Errorf("Unable to retrieve Sheets client: %v", err)
 	}
 
-	const spreadsheetId = "1Mal5p_TADNL6N_rfBAZatbShphyb3j8Bhu3ATD128RE"
-
 	driver := sqle.NewDefault()
-	driver.AddDatabase(mysheetsql.NewDatabase(spreadsheetId, srv))
+	driver.AddDatabase(mysheetsql.NewDatabase(c.SpreadsheetId, srv))
 
 	sqlConfig := server.Config{
 		Protocol: "tcp",
@@ -44,8 +63,10 @@ func main() {
 
 	s, err := server.NewDefaultServer(sqlConfig, driver)
 	if err != nil {
-		log.Fatalf(err.Error())
+		return fmt.Errorf("Failed to create a go-mysql-server Server: %v", err)
 	}
 
 	s.Start()
+
+	return nil
 }
